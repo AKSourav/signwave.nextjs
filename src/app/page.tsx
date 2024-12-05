@@ -62,36 +62,33 @@ const WebcamCapture: React.FC = () => {
 
   // Function to capture and send frame
   const captureAndSendFrame = useCallback(() => {
-    if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+    if (!streamRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
 
     try {
-      const canvas = document.createElement('canvas');
-      const video = videoRef.current;
-      
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+      const track = streamRef.current.getVideoTracks()[0];
+      //@ts-ignore
+      const imageCapture = new ImageCapture(track);
 
-      ctx.drawImage(video, 0, 0);
+      imageCapture.grabFrame()
+        .then((imageBitmap: any) => {
+          const canvas = document.createElement('canvas');
+          canvas.width = imageBitmap.width;
+          canvas.height = imageBitmap.height;
 
-      canvas.toBlob((blob) => {
-        if (blob && wsRef.current?.readyState === WebSocket.OPEN) {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64data = reader.result as string;
-            if (base64data && wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(base64data);
-            }
-          };
-          reader.readAsDataURL(blob);
-        }
-      }, 'image/jpeg', 0.8);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+
+          ctx.drawImage(imageBitmap, 0, 0);
+          const base64data = canvas.toDataURL('image/jpeg', 0.5);
+          if (base64data && wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(base64data);
+          }
+        })
+        .catch((err: any) => console.log('Error capturing frame:', err));
     } catch (err) {
-      console.error('Error capturing frame:', err);
+      console.error('Error in frame capture:', err);
     }
   }, []);
 
@@ -107,6 +104,7 @@ const WebcamCapture: React.FC = () => {
     try {
       console.log('Setting up new WebSocket connection...');
       wsRef.current = new WebSocket(WEBSOCKET_URL);
+      wsRef.current.binaryType = 'arraybuffer';
 
       wsRef.current.onopen = () => {
         console.log('WebSocket Connected');
@@ -116,7 +114,7 @@ const WebcamCapture: React.FC = () => {
 
         // Start frame capture only after connection is established
         if (!frameIntervalRef.current) {
-          frameIntervalRef.current = setInterval(captureAndSendFrame, 1000/25);
+          frameIntervalRef.current = setInterval(captureAndSendFrame, 1000 / 15);
         }
       };
 
@@ -146,34 +144,34 @@ const WebcamCapture: React.FC = () => {
           const response: WebSocketResponse = JSON.parse(event.data);
           //@ts-ignore
           // console.log("response",response.multiHandLandmarks[0])
-          
+
           // Create overlay canvas if it doesn't exist
           const video = videoRef.current;
           const canvas = canvasRef.current;
           if (!video || !canvas) return;
-          
+
           const ctx = canvas.getContext('2d');
           if (!ctx) return;
-      
+
           // Clear previous drawing
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
+
           // Set canvas size to match video
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
-      
+
           // if (response.error) {
           //   setError(response.error);
           //   return;
           // }
-      
+
           if (response.multiHandLandmarks && response.multiHandLandmarks[0]) {
             const landmarks = response.multiHandLandmarks[0];
-      
+
             // Draw hand connections (skeleton)
             ctx.lineWidth = 2;
             ctx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
-            
+
             // Define hand connections
             const handConnections = [
               // Thumb
@@ -189,12 +187,12 @@ const WebcamCapture: React.FC = () => {
               // Palm base
               [0, 5], [5, 9], [9, 13], [13, 17]
             ];
-      
+
             // Draw connections
             handConnections.forEach(([start, end]) => {
               const startLandmark = landmarks[start];
               const endLandmark = landmarks[end];
-      
+
               ctx.beginPath();
               ctx.moveTo(
                 startLandmark.x * canvas.width,
@@ -206,7 +204,7 @@ const WebcamCapture: React.FC = () => {
               );
               ctx.stroke();
             });
-      
+
             // Draw landmarks
             ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
             landmarks.forEach((landmark) => {
@@ -220,11 +218,11 @@ const WebcamCapture: React.FC = () => {
               );
               ctx.fill();
             });
-      
+
             // Calculate hand center for text placement
             const centerX = landmarks.reduce((sum, lm) => sum + lm.x, 0) / landmarks.length;
             const centerY = landmarks.reduce((sum, lm) => sum + lm.y, 0) / landmarks.length;
-      
+
             // Draw predicted letter
             if (response.resultData) {
               ctx.font = 'bold 48px Arial';
@@ -233,16 +231,16 @@ const WebcamCapture: React.FC = () => {
               ctx.lineWidth = 3;
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
-      
+
               // Position text above hand
               const textY = (centerY * canvas.height) - 50;
               const textX = centerX * canvas.width;
-      
+
               // Draw text stroke
               ctx.strokeText(response.resultData, textX, textY);
               // Draw text fill
               ctx.fillText(response.resultData, textX, textY);
-      
+
               // Update result state
               // setResult(response.resultData);
             }
@@ -276,7 +274,7 @@ const WebcamCapture: React.FC = () => {
       });
 
       streamRef.current = stream;
-      
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
@@ -311,11 +309,10 @@ const WebcamCapture: React.FC = () => {
           className="absolute top-0 left-0 w-full h-full"
           style={{ zIndex: 1 }}
         ></canvas>
-        
+
         <div className="absolute top-4 right-4 flex items-center space-x-2 bg-black bg-opacity-50 rounded-full px-3 py-1">
-          <div className={`h-3 w-3 rounded-full ${
-            isConnected ? 'bg-green-500' : 'bg-red-500'
-          } ${isConnected ? 'animate-pulse' : ''}`} />
+          <div className={`h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'
+            } ${isConnected ? 'animate-pulse' : ''}`} />
           <span className="text-sm font-medium text-white">
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>
